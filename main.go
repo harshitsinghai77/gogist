@@ -7,8 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/harshitsinghai/gogist/models"
+	"github.com/harshitsinghai/gogist/utils"
 	"github.com/joho/godotenv"
 	"github.com/levigross/grequests"
 	"github.com/urfave/cli"
@@ -18,44 +21,17 @@ var githubTokenKey string
 var githubAPI = "https://api.github.com/"
 var requestOptions *grequests.RequestOptions
 
-// Repo is the response json expected from the Github API
-type Repo struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	FullName string `json:"full_name"`
-	Forks    int    `json:"forks"`
-	Private  bool   `json:"private"`
-}
-
-// GistResponse is the response json expected after creating a gist
-type GistResponse struct {
-	URL         string `json:"html_url"`
-	Description string `json:"description"`
-}
-
-// File contains the struct tpye of file
-type File struct {
-	Content string `json:"content"`
-}
-
-// Gist is the body used when creating a gist
-type Gist struct {
-	Description string          `json:"description"`
-	Files       map[string]File `json:"files"`
-	Public      bool            `json:"public"`
-}
-
 func init() {
 	if err := godotenv.Load(); err != nil {
 		log.Fatal(err)
 	}
 
 	githubTokenKey = os.Getenv("GithubTokenKey")
-	requestOptions = &grequests.RequestOptions{Headers: map[string]string{"Accept": "application/vnd.github.v3+json"}, Auth: []string{"token", githubTokenKey}}
+	requestOptions = &grequests.RequestOptions{Headers: map[string]string{"Accept": "application/vnd.github.v3+json"}, Auth: []string{"token ", githubTokenKey}}
 }
 
-func getResp(username string) []Repo {
-	var repos []Repo
+func getResp(username string) []models.Repo {
+	var repos []models.Repo
 
 	repoURL := fmt.Sprintf(githubAPI+"users/%s/repos", username)
 	resp, err := grequests.Get(repoURL, requestOptions)
@@ -63,17 +39,16 @@ func getResp(username string) []Repo {
 		fmt.Println((err))
 	}
 	resp.JSON(&repos)
-
 	return repos
 }
 
-func createGist(gist Gist) *GistResponse {
+func createGist(gist models.Gist) *models.GistResponse {
 
 	postBody, _ := json.Marshal(gist)
 	requestOptionsCopy := requestOptions
 	requestOptionsCopy.JSON = string(postBody)
 
-	var gistResponse *GistResponse
+	var gistResponse *models.GistResponse
 
 	resp, err := grequests.Post(githubAPI+"gists", requestOptionsCopy)
 	if err != nil {
@@ -84,9 +59,9 @@ func createGist(gist Gist) *GistResponse {
 	return gistResponse
 }
 
-func createGistFromFolder(description string, root string) *GistResponse {
+func createGistFromFolder(description string, root string) *models.GistResponse {
 
-	myFiles := make(map[string]File)
+	myFiles := make(map[string]models.File)
 	var filesPath []string
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -103,12 +78,12 @@ func createGistFromFolder(description string, root string) *GistResponse {
 			log.Println("Error when reading the file")
 		}
 		fileName := strings.Split(path, "/")[1]
-		myFiles[fileName] = File{Content: string(content)}
+		myFiles[fileName] = models.File{Content: string(content)}
 		fmt.Println("Creating gist for ", fileName)
 	}
 	fmt.Println()
 
-	gist := Gist{
+	gist := models.Gist{
 		Description: description,
 		Files:       myFiles,
 		Public:      true,
@@ -117,26 +92,38 @@ func createGistFromFolder(description string, root string) *GistResponse {
 	return createGist(gist)
 }
 
-func createGistFromFiles(args cli.Args) *GistResponse {
+func createGistFromFiles(args cli.Args) *models.GistResponse {
 
 	description := args.Get(0)
-	myFiles := make(map[string]File)
+	myFiles := make(map[string]models.File)
 
 	for i := 1; i < args.Len(); i++ {
 		content, err := ioutil.ReadFile(args.Get(i))
 		if err != nil {
 			log.Println("Error when reading the file")
 		}
-		myFiles[args.Get(i)] = File{Content: string(content)}
+		myFiles[args.Get(i)] = models.File{Content: string(content)}
 	}
 
-	gist := Gist{
+	gist := models.Gist{
 		Description: description,
 		Files:       myFiles,
 		Public:      true,
 	}
 
 	return createGist(gist)
+}
+
+func createTimeline(username string) {
+	fmt.Println("Generating timeline.html....")
+	repoDetails := getResp(username)
+
+	sort.Slice(repoDetails, func(i, j int) bool {
+		return repoDetails[i].CreatedAt.Before(repoDetails[j].CreatedAt)
+	})
+
+	utils.GenerateTimeline(repoDetails)
+	fmt.Println("Generated timeline.html....")
 }
 
 func main() {
@@ -199,6 +186,21 @@ func main() {
 						// log.Println("Done")
 					} else {
 						log.Println("Please give sufficient arguments. See -h to see help")
+					}
+					return nil
+				},
+			},
+			{
+				Name:    "create-timeline",
+				Aliases: []string{"timeline"},
+				Usage:   "Creates a timeline.html file based on your github repo. [Usage]: goTool create-timeline user_name",
+				Action: func(c *cli.Context) error {
+					if c.Args().Len() > 0 {
+						// Github API
+						username := c.Args().Get(0)
+						createTimeline(username)
+					} else {
+						log.Println("Please give a username. See -h to see help")
 					}
 					return nil
 				},
